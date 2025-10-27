@@ -160,10 +160,10 @@ class FileConverter:
             return "audio"
         elif extensao in self.extensoes_video:
             return "video"
-        elif extensao in self.extensoes_imagem:
-            return "imagem"
         elif extensao in self.extensoes_gif:
             return "gif"
+        elif extensao in self.extensoes_imagem:
+            return "imagem"
         else:
             return "desconhecido"
 
@@ -311,7 +311,12 @@ class FileConverter:
 
             ttk.Label(formato_frame, text="Converter para:").pack(
                 side=tk.LEFT, padx=(0, 10))
+
+            # MODIFICADO: Adicionado 'gif'
             formatos_video = list(self.extensoes_video.keys())
+            if 'gif' not in formatos_video:
+                formatos_video.append('gif')
+
             self.combo_formato_video = ttk.Combobox(formato_frame, textvariable=self.formato_destino_var,
                                                     values=formatos_video, width=15, state="readonly")
             self.combo_formato_video.pack(side=tk.LEFT)
@@ -332,7 +337,7 @@ class FileConverter:
             info_frame = ttk.Frame(self.aba_video)
             info_frame.pack(fill=tk.X, pady=10)
 
-            info_text = ("Converte arquivos de vídeo entre diferentes formatos.\n"
+            info_text = ("Converte arquivos de vídeo entre diferentes formatos (incluindo MP4 para GIF).\n"
                          f"Formatos suportados: {', '.join(list(self.extensoes_video.keys())[:5])}...")
 
             ttk.Label(info_frame, text=info_text, wraplength=500,
@@ -351,10 +356,15 @@ class FileConverter:
 
             ttk.Label(formato_frame, text="Converter para:").pack(
                 side=tk.LEFT, padx=(0, 10))
-            # Combinar imagens estáticas e animadas
+
+            # MODIFICADO: Adicionado 'mp4'
             formatos_imagem = list(
                 self.extensoes_imagem.keys()) + list(self.extensoes_gif.keys())
+            if 'mp4' not in formatos_imagem:
+                formatos_imagem.append('mp4')
+
             formatos_imagem = list(set(formatos_imagem))  # Remover duplicatas
+
             self.combo_formato_imagem = ttk.Combobox(formato_frame, textvariable=self.formato_destino_var,
                                                      values=formatos_imagem, width=15, state="readonly")
             self.combo_formato_imagem.pack(side=tk.LEFT)
@@ -377,7 +387,7 @@ class FileConverter:
             info_frame = ttk.Frame(self.aba_imagem)
             info_frame.pack(fill=tk.X, pady=10)
 
-            info_text = ("Converte imagens entre diferentes formatos.\n"
+            info_text = ("Converte imagens (incluindo GIF/WEBP para MP4).\n"
                          f"Suporta: {', '.join(list(self.extensoes_imagem.keys())[:4])}, GIF, WebP animado...")
 
             ttk.Label(info_frame, text=info_text, wraplength=500,
@@ -590,7 +600,10 @@ class FileConverter:
             if not ffmpeg_path:
                 raise Exception("FFmpeg não encontrado")
 
+            # --- MUDANÇA AQUI ---
+            # Voltamos ao comando original, sem forçar parâmetros de entrada
             comando = [ffmpeg_path, "-i", arquivo_origem]
+            # --- FIM DA MUDANÇA ---
 
             # Configurações específicas por tipo
             if modo == "audio":
@@ -612,6 +625,8 @@ class FileConverter:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                encoding='utf-8',
+                errors='ignore',
                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
             )
 
@@ -633,12 +648,46 @@ class FileConverter:
                                                                f"Arquivo convertido com sucesso!\nSalvo como: {os.path.basename(arquivo_destino)}"))
             else:
                 error_msg = stderr.strip() if stderr else "Erro desconhecido"
+
+                logging.error(f"Erro FFmpeg completo: {error_msg}")
+
                 self.root.after(0, lambda: self.progresso_label.config(
                     text="Erro na conversão"))
+
+                clean_error = error_msg
+                try:
+                    # Tenta remover o banner do ffmpeg da mensagem de erro
+                    clean_error = re.sub(
+                        r'ffmpeg version.*?\n', '', error_msg, flags=re.DOTALL)
+                    clean_error = re.sub(
+                        r'built with.*?\n', '', clean_error, flags=re.DOTALL)
+                    clean_error = re.sub(
+                        r'configuration:.*?\n', '', clean_error, flags=re.DOTALL)
+                    clean_error = re.sub(
+                        r'libavutil.*?\n', '', clean_error, flags=re.DOTALL)
+                    clean_error = re.sub(
+                        r'libavcodec.*?\n', '', clean_error, flags=re.DOTALL)
+                    clean_error = re.sub(
+                        r'libavformat.*?\n', '', clean_error, flags=re.DOTALL)
+                    clean_error = re.sub(
+                        r'libavdevice.*?\n', '', clean_error, flags=re.DOTALL)
+                    clean_error = re.sub(
+                        r'libavfilter.*?\n', '', clean_error, flags=re.DOTALL)
+                    clean_error = re.sub(
+                        r'libswscale.*?\n', '', clean_error, flags=re.DOTALL)
+                    clean_error = re.sub(
+                        r'libswresample.*?\n', '', clean_error, flags=re.DOTALL)
+                    clean_error = re.sub(
+                        r'libpostproc.*?\n', '', clean_error, flags=re.DOTALL)
+                    clean_error = clean_error.strip()
+                except Exception:
+                    pass
+
                 self.root.after(0, lambda: messagebox.showerror("Erro",
-                                                                f"Erro durante a conversão:\n{error_msg[:200]}..."))
+                                                                f"Erro durante a conversão:\n{clean_error[:250]}..."))
 
         except Exception as e:
+            logging.error(f"Erro na aplicação (Python): {str(e)}")
             self.root.after(0, lambda: self.progresso_label.config(
                 text=f"Erro: {str(e)[:50]}..."))
             self.root.after(0, lambda: messagebox.showerror(
@@ -690,38 +739,71 @@ class FileConverter:
     def configurar_comando_video(self, comando, formato_destino):
         """Configura comando FFmpeg para conversão de vídeo"""
         qualidade = self.qualidade_var.get()
+        filtros_vf = []  # Usar uma lista para construir filtros
 
-        # Configurações de resolução
+        # --- LÓGICA DE ESCALA E GIF CORRIGIDA ---
+
+        # 1. Preparar o filtro de escala e as flags
+        filtro_escala = ""
+        # Prepara a flag do lanczos, que SÓ deve ser usada se a saída for GIF
+        flags_gif = ":flags=lanczos" if formato_destino == "gif" else ""
+
         if qualidade != "Manter Original":
+            # Se o usuário escolheu uma resolução, aplica ela + a flag do GIF (se aplicável)
             if "4K" in qualidade:
-                comando.extend(["-vf", "scale=3840:2160"])
+                filtro_escala = f"scale=3840:2160{flags_gif}"
             elif "1080p" in qualidade:
-                comando.extend(["-vf", "scale=1920:1080"])
+                filtro_escala = f"scale=1920:1080{flags_gif}"
             elif "720p" in qualidade:
-                comando.extend(["-vf", "scale=1280:720"])
+                filtro_escala = f"scale=1280:720{flags_gif}"
             elif "480p" in qualidade:
-                comando.extend(["-vf", "scale=854:480"])
+                filtro_escala = f"scale=854:480{flags_gif}"
             elif "360p" in qualidade:
-                comando.extend(["-vf", "scale=640:360"])
+                filtro_escala = f"scale=640:360{flags_gif}"
+        elif formato_destino == "gif":
+            # Se for "Manter Original" E a saída for GIF,
+            # é melhor aplicar um scale padrão (ex: 500px de largura)
+            # para evitar GIFs gigantescos.
+            filtro_escala = f"scale=500:-1{flags_gif}"
 
-        # Configurações específicas por formato de vídeo
-        if formato_destino == "mp4":
+        # Adiciona o filtro de escala (se algum foi definido)
+        if filtro_escala:
+            filtros_vf.append(filtro_escala)
+
+        # 2. Adicionar filtro de FPS (APENAS para GIF)
+        if formato_destino == "gif":
+            filtros_vf.append("fps=10")
+
+        # --- FIM DA LÓGICA CORRIGIDA ---
+
+        # Configurações específicas por formato de vídeo (Codecs)
+        if formato_destino == "gif":
+            # Nenhuma configuração extra de codec/áudio/crf é necessária
+            pass
+        elif formato_destino == "mp4":
             comando.extend(["-c:v", "libx264", "-c:a", "aac"])
+            comando.extend(["-crf", "23", "-preset", "medium"])
         elif formato_destino == "mkv":
             comando.extend(["-c:v", "libx264", "-c:a", "aac"])
+            comando.extend(["-crf", "23", "-preset", "medium"])
         elif formato_destino == "avi":
             comando.extend(["-c:v", "libx264", "-c:a", "mp3"])
+            comando.extend(["-crf", "23", "-preset", "medium"])
         elif formato_destino == "webm":
             comando.extend(["-c:v", "libvpx-vp9", "-c:a", "libopus"])
+            comando.extend(["-crf", "23", "-preset", "medium"])
         elif formato_destino == "mov":
             comando.extend(["-c:v", "libx264", "-c:a", "aac"])
+            comando.extend(["-crf", "23", "-preset", "medium"])
         elif formato_destino == "flv":
             comando.extend(["-c:v", "libx264", "-c:a", "aac"])
+            comando.extend(["-crf", "23", "-preset", "medium"])
         elif formato_destino == "wmv":
             comando.extend(["-c:v", "wmv2", "-c:a", "wmav2"])
 
-        # Configurações gerais de qualidade para vídeo
-        comando.extend(["-crf", "23", "-preset", "medium"])
+        # Aplica os filtros VF (se houver algum na lista)
+        if filtros_vf:
+            comando.extend(["-vf", ",".join(filtros_vf)])
 
     def configurar_comando_imagem(self, comando, formato_destino):
         """Configura comando FFmpeg para conversão de imagem"""
@@ -740,6 +822,17 @@ class FileConverter:
                 comando.extend(["-q:v", "10"])
             elif "40%" in qualidade:
                 comando.extend(["-q:v", "15"])
+
+        elif formato_destino == "mp4":  # <--- ADICIONADO
+            # Converte GIF/WEBP animado para MP4
+            # -pix_fmt yuv420p é crucial para compatibilidade
+            # -vf scale... garante que as dimensões sejam pares (necessário para yuv420p)
+            comando.extend([
+                "-c:v", "libx264",
+                "-pix_fmt", "yuv420p",
+                "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2"
+            ])
+
         elif formato_destino == "png":
             comando.extend(["-c:v", "png"])
         elif formato_destino == "bmp":
@@ -751,21 +844,21 @@ class FileConverter:
         elif formato_destino == "ico":
             comando.extend(["-vf", "scale=256:256"])
 
-        # Para GIFs animados
-        if formato_destino == "gif":
+        # Para GIFs animados (deixamos como estava)
+        elif formato_destino == "gif":
             comando.extend(["-vf", "fps=10,scale=320:-1:flags=lanczos"])
 
 
 def main():
     """Função principal para executar o aplicativo"""
     try:
-        # Configurar logging
+        # Configurar logging (REMOVIDO O FileHandler)
         logging.basicConfig(
             level=logging.INFO,
             format='%(asctime)s - %(levelname)s - %(message)s',
             handlers=[
-                logging.FileHandler('conversor.log', encoding='utf-8'),
-                logging.StreamHandler()
+                # logging.FileHandler('conversor.log', encoding='utf-8'), # <--- LINHA REMOVIDA
+                logging.StreamHandler()  # Mantém apenas o log no console (CMD)
             ]
         )
 
