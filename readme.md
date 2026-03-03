@@ -1,5 +1,5 @@
 # Conversor de Arquivos Multimídia
-Uma aplicação desktop portátil de alto desempenho para conversão de arquivos de áudio, vídeo e imagem, utilizando o motor FFmpeg com uma interface gráfica intuitiva.
+Uma aplicação desktop portátil para conversão de arquivos de áudio, vídeo e imagem, utilizando o motor FFmpeg com uma interface gráfica intuitiva.
 
 ![Screenshot da aplicação](screenshot.png)
 
