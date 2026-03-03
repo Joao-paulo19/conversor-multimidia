@@ -5,896 +5,754 @@ import threading
 import subprocess
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
-from tkinter import font as tkfont
 import logging
 from pathlib import Path
-import time
-from datetime import datetime
+
+# Configuração de suporte para formatos adicionais e mapeamento
+EXTENSOES_AUDIO = {
+    'mp3': 'MPEG Layer III', 'wav': 'Waveform Audio', 'flac': 'Free Lossless Audio',
+    'aac': 'Advanced Audio Codec', 'ogg': 'Ogg Vorbis', 'm4a': 'MPEG-4 Audio',
+    'opus': 'Opus', 'alac': 'Apple Lossless Audio'
+}
+
+# GIF, WebP e APNG adicionados como vídeo para reconhecimento automático
+EXTENSOES_VIDEO = {
+    'mp4': 'MPEG-4 Part 14', 'mkv': 'Matroska Video', 'avi': 'Audio Video Interleave',
+    'mov': 'QuickTime Movie', 'webm': 'Web Media', 'flv': 'Flash Video',
+    'wmv': 'Windows Media Video', 'ts': 'MPEG Transport Stream',
+    'gif': 'GIF Animado', 'webp': 'WebP Animado', 'apng': 'Animated PNG'
+}
+
+# Mantidos aqui para quando o foco for conversão de imagem estática
+EXTENSOES_IMAGEM = {
+    'jpg': 'JPEG Image', 'jpeg': 'JPEG Image', 'jfif': 'JPEG File Interchange Format',
+    'png': 'Portable Network Graphics', 'bmp': 'Bitmap Image', 'webp': 'WebP Image',
+    'tiff': 'TIFF Image', 'ico': 'Icon File', 'gif': 'GIF Image', 'apng': 'APNG Image'
+}
+
+QUALIDADES_AUDIO = [
+    "Manter Original", "320kbps (Alta)", "256kbps (Alta)",
+    "192kbps (Média)", "128kbps (Padrão)", "64kbps (Baixa)"
+]
+
+QUALIDADES_VIDEO = [
+    "Manter Original", "4K (2160p)", "1080p (Full HD)",
+    "720p (HD)", "480p (SD)", "360p (SD Baixa)"
+]
 
 
 class FileConverter:
     def __init__(self, root):
-        # Configuração principal da janela
         self.root = root
-        self.root.title("Conversor de Arquivos Multimídia")
-        self.root.geometry("700x650")
-        self.root.configure(bg="#f0f0f0")
-        self.root.resizable(True, True)
+        self.root.title("Conversor Multimídia")
+        self.root.geometry("800x700")
+        self.root.configure(bg="#f5f5f5")
 
-        # Variáveis
+        # Variáveis de Estado
         self.arquivo_origem_var = tk.StringVar()
         self.pasta_destino_var = tk.StringVar()
         self.formato_destino_var = tk.StringVar()
         self.qualidade_var = tk.StringVar()
-        self.modo_conversao_var = tk.StringVar(value="audio")
+        self.modo_ativo = tk.StringVar(value="video")
 
         self.processo_ativo = None
         self.cancelar_conversao = False
 
-        # Extensões suportadas por categoria
-        self.extensoes_audio = {
-            'mp3': 'MPEG Layer III',
-            'wav': 'Waveform Audio',
-            'flac': 'Free Lossless Audio',
-            'aac': 'Advanced Audio Codec',
-            'ogg': 'Ogg Vorbis',
-            'm4a': 'MPEG-4 Audio',
-            'opus': 'Opus',
-            'alac': 'Apple Lossless Audio',
-            'aiff': 'Audio Interchange',
-            'amr': 'Adaptive Multi-Rate'
-        }
-
-        self.extensoes_video = {
-            'mp4': 'MPEG-4 Part 14',
-            'mkv': 'Matroska Video',
-            'avi': 'Audio Video Interleave',
-            'mov': 'QuickTime Movie',
-            'webm': 'Web Media',
-            'flv': 'Flash Video',
-            'wmv': 'Windows Media Video',
-            '3gp': '3GPP Media File',
-            'ts': 'Transport Stream',
-            'm4v': 'MPEG-4 Video'
-        }
-
-        self.extensoes_imagem = {
-            'jpg': 'JPEG Image',
-            'jpeg': 'JPEG Image',
-            'png': 'Portable Network Graphics',
-            'bmp': 'Bitmap Image',
-            'tiff': 'TIFF Image',
-            'tif': 'TIFF Image',
-            'heic': 'HEIC Image',
-            'ico': 'Icon File',
-            'webp': 'WebP Image',
-            'svg': 'Scalable Vector Graphics'
-        }
-
-        self.extensoes_gif = {
-            'gif': 'Graphics Interchange Format',
-            'webp': 'WebP Animado',
-            'apng': 'Animated PNG'
-        }
-
-        # Qualidades disponíveis
-        self.qualidades_audio = [
-            "Manter Original",
-            "320kbps (Alta)",
-            "256kbps (Alta)",
-            "192kbps (Média)",
-            "128kbps (Padrão)",
-            "96kbps (Baixa)",
-            "64kbps (Muito Baixa)"
-        ]
-
-        self.qualidades_video = [
-            "Manter Original",
-            "4K (2160p)",
-            "1080p (Full HD)",
-            "720p (HD)",
-            "480p (SD)",
-            "360p (SD Baixa)"
-        ]
-
-        # Inicializar valores padrão
-        self.qualidade_var.set(self.qualidades_audio[0])
-
-        # Verificar dependências
         if not self.verificar_dependencias():
             messagebox.showerror(
-                "Erro", "FFmpeg não encontrado. Por favor, instale o FFmpeg para usar este conversor.")
+                "Erro Crítico", "FFmpeg/FFprobe não encontrados no sistema ou pasta local.")
+            self.root.destroy()
             return
 
-        # Criar a interface
-        self.criar_interface()
+        self.setup_ui()
 
     def recurso_caminho(self, relativo):
-        """Detecta o caminho de recursos"""
+        """Busca caminhos para PyInstaller ou execução local"""
         try:
-            if hasattr(sys, '_MEIPASS'):
-                caminho = os.path.join(sys._MEIPASS, relativo)
-            else:
-                caminho = os.path.join(os.path.abspath("."), relativo)
+            base_path = sys._MEIPASS
+        except Exception:
+            base_path = os.path.abspath(".")
 
-            if os.path.exists(caminho):
-                return caminho
-            else:
-                import shutil
-                return shutil.which(relativo.replace('.exe', ''))
-        except Exception as e:
-            return None
+        caminho = os.path.join(base_path, relativo)
+        if os.path.exists(caminho):
+            return caminho
+        return shutil.which(relativo.replace('.exe', '')) if os.name == 'nt' else shutil.which(relativo)
 
     def verificar_dependencias(self):
-        """Verifica se o FFmpeg está disponível"""
-        try:
-            ffmpeg_path = self.recurso_caminho(
-                "ffmpeg.exe") or self.recurso_caminho("ffmpeg")
-            if ffmpeg_path:
-                return True
-
-            # Tentar encontrar no PATH do sistema
-            import shutil
-            return shutil.which("ffmpeg") is not None
-        except Exception as e:
-            return False
+        import shutil
+        ffmpeg = self.recurso_caminho("ffmpeg.exe") or shutil.which("ffmpeg")
+        ffprobe = self.recurso_caminho(
+            "ffprobe.exe") or shutil.which("ffprobe")
+        return ffmpeg is not None and ffprobe is not None
 
     def obter_ffmpeg_path(self):
-        """Obtém o caminho do FFmpeg"""
-        ffmpeg_path = self.recurso_caminho(
-            "ffmpeg.exe") or self.recurso_caminho("ffmpeg")
-        if ffmpeg_path:
-            return ffmpeg_path
-
         import shutil
-        return shutil.which("ffmpeg")
+        return self.recurso_caminho("ffmpeg.exe") or shutil.which("ffmpeg")
 
-    def detectar_tipo_arquivo(self, arquivo):
-        """Detecta o tipo do arquivo baseado na extensão"""
-        if not arquivo:
-            return "desconhecido"
-
-        extensao = arquivo.lower().split('.')[-1]
-
-        if extensao in self.extensoes_audio:
+    def detectar_tipo_arquivo(self, caminho):
+        """Detecta o tipo priorizando a aba atual se for formato híbrido"""
+        ext = caminho.lower().split('.')[-1]
+        aba_atual = self.modo_ativo.get()
+        # Formatos híbridos: se o usuário já estiver na aba de vídeo/imagem, mantém a preferência
+        if ext in ['gif', 'webp', 'apng']:
+            return aba_atual if aba_atual in ['video', 'imagem'] else "video"
+        if ext in EXTENSOES_AUDIO:
             return "audio"
-        elif extensao in self.extensoes_video:
+        if ext in EXTENSOES_VIDEO:
             return "video"
-        elif extensao in self.extensoes_gif:
-            return "gif"
-        elif extensao in self.extensoes_imagem:
+        if ext in EXTENSOES_IMAGEM:
             return "imagem"
-        else:
-            return "desconhecido"
+        return "desconhecido"
 
-    def criar_interface(self):
-        """Cria a interface gráfica do aplicativo"""
-        try:
-            # Estilo para widgets
-            estilo = ttk.Style()
-            estilo.configure("TButton", font=("Segoe UI", 10))
-            estilo.configure("TLabel", font=(
-                "Segoe UI", 10), background="#f0f0f0")
-            estilo.configure("Header.TLabel", font=(
-                "Segoe UI", 12, "bold"), background="#f0f0f0")
-            estilo.configure("TFrame", background="#f0f0f0")
-            estilo.configure("TRadiobutton", background="#f0f0f0")
+    def setup_ui(self):
+        # Estilização
+        style = ttk.Style()
+        style.theme_use('clam')
+        style.configure("TFrame", background="#f5f5f5")
+        style.configure("TLabel", background="#f5f5f5", font=("Segoe UI", 10))
+        style.configure("Header.TLabel", font=("Segoe UI", 14, "bold"))
+        style.configure("Action.TButton", font=("Segoe UI", 10, "bold"))
 
-            # Frame principal
-            main_frame = ttk.Frame(self.root, padding=20)
-            main_frame.pack(fill=tk.BOTH, expand=True)
+        self.main_container = ttk.Frame(self.root, padding="20")
+        self.main_container.pack(fill=tk.BOTH, expand=True)
 
-            # Título
-            titulo_label = ttk.Label(main_frame, text="Conversor de Arquivos Multimídia",
-                                     style="Header.TLabel", font=("Segoe UI", 16, "bold"))
-            titulo_label.pack(pady=(0, 20))
+        # Header
+        header = ttk.Label(
+            self.main_container, text="Conversor de Arquivos Multimídia", style="Header.TLabel")
+        header.pack(pady=(0, 20))
 
-            # Frame para arquivo de origem
-            origem_frame = ttk.Frame(main_frame)
-            origem_frame.pack(fill=tk.X, pady=5)
+        # Seção de Seleção de Arquivo
+        file_frame = ttk.LabelFrame(
+            self.main_container, text=" 1. Seleção de Arquivo ", padding="10")
+        file_frame.pack(fill=tk.X, pady=5)
 
-            ttk.Label(origem_frame, text="Arquivo de origem:").pack(
-                side=tk.LEFT, padx=(0, 10))
-            self.entry_origem = ttk.Entry(
-                origem_frame, textvariable=self.arquivo_origem_var, width=40)
-            self.entry_origem.pack(side=tk.LEFT, fill=tk.X, expand=True)
-            ttk.Button(origem_frame, text="Procurar...", command=self.escolher_arquivo).pack(
-                side=tk.LEFT, padx=(10, 0))
+        self.ent_origem = ttk.Entry(
+            file_frame, textvariable=self.arquivo_origem_var)
+        self.ent_origem.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
 
-            # Frame para tipo detectado
-            self.tipo_frame = ttk.Frame(main_frame)
-            self.tipo_frame.pack(fill=tk.X, pady=5)
-            self.tipo_label = ttk.Label(
-                self.tipo_frame, text="Selecione um arquivo para detectar o tipo")
-            self.tipo_label.pack(side=tk.LEFT)
+        btn_procurar = ttk.Button(
+            file_frame, text="Procurar", command=self.selecionar_arquivo)
+        btn_procurar.pack(side=tk.RIGHT)
 
-            # Notebook para abas de conversão
-            self.notebook = ttk.Notebook(main_frame)
-            self.notebook.pack(fill=tk.BOTH, expand=True, pady=10)
+        # Label de Info do Arquivo
+        self.lbl_info_arquivo = ttk.Label(
+            self.main_container, text="Nenhum arquivo selecionado", foreground="#666")
+        self.lbl_info_arquivo.pack(fill=tk.X, pady=2)
 
-            # Criar abas
-            self.aba_audio = ttk.Frame(self.notebook, padding=10)
-            self.aba_video = ttk.Frame(self.notebook, padding=10)
-            self.aba_imagem = ttk.Frame(self.notebook, padding=10)
+        # Container de Abas (Notebook)
+        self.tabs = ttk.Notebook(self.main_container)
+        self.tabs.pack(fill=tk.BOTH, expand=True, pady=15)
 
-            self.configurar_aba_audio()
-            self.configurar_aba_video()
-            self.configurar_aba_imagem()
+        # Criação das Abas
+        self.tab_video = ttk.Frame(self.tabs, padding="15")
+        self.tab_audio = ttk.Frame(self.tabs, padding="15")
+        self.tab_imagem = ttk.Frame(self.tabs, padding="15")
 
-            # Frame para pasta de destino
-            pasta_frame = ttk.Frame(main_frame)
-            pasta_frame.pack(fill=tk.X, pady=10)
+        self.tabs.add(self.tab_video, text="  VÍDEOS  ")
+        self.tabs.add(self.tab_audio, text="  ÁUDIOS  ")
+        self.tabs.add(self.tab_imagem, text="  IMAGENS  ")
 
-            ttk.Label(pasta_frame, text="Pasta de destino:").pack(
-                side=tk.LEFT, padx=(0, 10))
-            ttk.Entry(pasta_frame, textvariable=self.pasta_destino_var,
-                      width=40).pack(side=tk.LEFT, fill=tk.X, expand=True)
-            ttk.Button(pasta_frame, text="Escolher...", command=self.escolher_pasta).pack(
-                side=tk.LEFT, padx=(10, 0))
+        self.build_tab_video()
+        self.build_tab_audio()
+        self.build_tab_imagem()
 
-            # Barra de progresso
-            progresso_frame = ttk.Frame(main_frame)
-            progresso_frame.pack(fill=tk.X, pady=10)
+        self.tabs.bind("<<NotebookTabChanged>>", self.on_tab_change)
 
-            self.progresso_label = ttk.Label(
-                progresso_frame, text="Selecione um arquivo para começar")
-            self.progresso_label.pack(fill=tk.X)
+        # Destino e Configurações Finais
+        dest_frame = ttk.LabelFrame(
+            self.main_container, text=" 2. Destino da Conversão ", padding="10")
+        dest_frame.pack(fill=tk.X, pady=5)
 
-            self.barra_progresso = ttk.Progressbar(
-                progresso_frame, orient=tk.HORIZONTAL, length=100, mode='indeterminate')
-            self.barra_progresso.pack(fill=tk.X, pady=5)
+        ttk.Label(dest_frame, text="Pasta de Saída:").pack(anchor=tk.W)
+        dest_inner = ttk.Frame(dest_frame)
+        dest_inner.pack(fill=tk.X)
 
-            # Botões
-            botao_frame = ttk.Frame(main_frame)
-            botao_frame.pack(fill=tk.X, pady=10)
+        ttk.Entry(dest_inner, textvariable=self.pasta_destino_var).pack(
+            side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
+        ttk.Button(dest_inner, text="Alterar",
+                   command=self.selecionar_pasta).pack(side=tk.RIGHT)
 
-            self.botao_cancelar = ttk.Button(
-                botao_frame, text="Cancelar", command=self.cancelar_operacao, width=20, state=tk.DISABLED)
-            self.botao_cancelar.pack(side=tk.RIGHT, padx=(10, 0))
+    def build_tab_video(self):
+        ttk.Label(self.tab_video, text="Formato de Saída:").grid(
+            row=0, column=0, sticky=tk.W, pady=5)
+        self.cb_video_fmt = ttk.Combobox(self.tab_video, values=list(
+            EXTENSOES_VIDEO.keys()), state="readonly")
+        self.cb_video_fmt.grid(row=0, column=1, sticky=tk.EW, padx=5)
+        self.cb_video_fmt.set("mp4")
 
-            self.botao_converter = ttk.Button(
-                botao_frame, text="Converter", command=self.iniciar_conversao, width=20)
-            self.botao_converter.pack(side=tk.RIGHT)
+        ttk.Label(self.tab_video, text="Resolução:").grid(
+            row=1, column=0, sticky=tk.W, pady=5)
+        self.cb_video_qual = ttk.Combobox(
+            self.tab_video, values=QUALIDADES_VIDEO, state="readonly")
+        self.cb_video_qual.grid(row=1, column=1, sticky=tk.EW, padx=5)
+        self.cb_video_qual.set(QUALIDADES_VIDEO[0])
 
-            # Bind para detectar mudanças no arquivo
-            self.arquivo_origem_var.trace('w', self.on_arquivo_mudou)
+        info_vid = ttk.Label(self.tab_video, text="Dica: MP4 para GIF usa otimização via paleta de cores.", font=(
+            "Segoe UI", 8), foreground="#777")
+        info_vid.grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=10)
 
-        except Exception as e:
-            messagebox.showerror("Erro", f"Erro ao criar interface: {e}")
+    def build_tab_audio(self):
+        ttk.Label(self.tab_audio, text="Formato de Saída:").grid(
+            row=0, column=0, sticky=tk.W, pady=5)
+        self.cb_audio_fmt = ttk.Combobox(self.tab_audio, values=list(
+            EXTENSOES_AUDIO.keys()), state="readonly")
+        self.cb_audio_fmt.grid(row=0, column=1, sticky=tk.EW, padx=5)
+        self.cb_audio_fmt.set("mp3")
 
-    def configurar_aba_audio(self):
-        """Configura os widgets da aba de áudio"""
-        try:
-            # Formato de saída
-            formato_frame = ttk.Frame(self.aba_audio)
-            formato_frame.pack(fill=tk.X, pady=10)
+        ttk.Label(self.tab_audio, text="Bitrate:").grid(
+            row=1, column=0, sticky=tk.W, pady=5)
+        self.cb_audio_qual = ttk.Combobox(
+            self.tab_audio, values=QUALIDADES_AUDIO, state="readonly")
+        self.cb_audio_qual.grid(row=1, column=1, sticky=tk.EW, padx=5)
+        self.cb_audio_qual.set(QUALIDADES_AUDIO[0])
 
-            ttk.Label(formato_frame, text="Converter para:").pack(
-                side=tk.LEFT, padx=(0, 10))
-            formatos_audio = list(self.extensoes_audio.keys())
-            self.combo_formato_audio = ttk.Combobox(formato_frame, textvariable=self.formato_destino_var,
-                                                    values=formatos_audio, width=15, state="readonly")
-            self.combo_formato_audio.pack(side=tk.LEFT)
-            self.combo_formato_audio.set('mp3')
+    def build_tab_imagem(self):
+        ttk.Label(self.tab_imagem, text="Formato de Saída:").grid(
+            row=0, column=0, sticky=tk.W, pady=5)
+        img_formats = list(EXTENSOES_IMAGEM.keys())
+        self.cb_img_fmt = ttk.Combobox(
+            self.tab_imagem, values=img_formats, state="readonly")
+        self.cb_img_fmt.grid(row=0, column=1, sticky=tk.EW, padx=5)
+        self.cb_img_fmt.set("png")
+        ttk.Label(self.tab_imagem, text="Qualidade/Compressão:").grid(row=1,
+                                                                      column=0, sticky=tk.W, pady=5)
+        self.cb_img_qual = ttk.Combobox(self.tab_imagem, values=[
+                                        "Alta (90%)", "Média (75%)", "Baixa (50%)"], state="readonly")
+        self.cb_img_qual.grid(row=1, column=1, sticky=tk.EW, padx=5)
+        self.cb_img_qual.set("Alta (90%)")
 
-            # Qualidade
-            qualidade_frame = ttk.Frame(self.aba_audio)
-            qualidade_frame.pack(fill=tk.X, pady=10)
+        lbl_jfif_note = ttk.Label(
+            self.tab_imagem, text="Suporte total a .jfif (entrada/saída).", font=("Segoe UI", 8), foreground="#777")
+        lbl_jfif_note.grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=10)
 
-            ttk.Label(qualidade_frame, text="Qualidade:").pack(
-                side=tk.LEFT, padx=(0, 10))
-            self.combo_qualidade_audio = ttk.Combobox(qualidade_frame, textvariable=self.qualidade_var,
-                                                      values=self.qualidades_audio, width=20, state="readonly")
-            self.combo_qualidade_audio.pack(side=tk.LEFT)
-            self.combo_qualidade_audio.set(self.qualidades_audio[0])
+        # 3. Barra de Progresso e Status
+        status_frame = ttk.LabelFrame(
+            self.main_container, text=" 3. Status da Operação ", padding="10")
+        status_frame.pack(fill=tk.X, pady=10)
 
-            # Informações
-            info_frame = ttk.Frame(self.aba_audio)
-            info_frame.pack(fill=tk.X, pady=10)
+        self.lbl_status = ttk.Label(
+            status_frame, text="Aguardando seleção de arquivo...")
+        self.lbl_status.pack(fill=tk.X)
 
-            info_text = ("Converte arquivos de áudio entre diferentes formatos.\n"
-                         f"Formatos suportados: {', '.join(list(self.extensoes_audio.keys())[:5])}...")
+        self.progress_bar = ttk.Progressbar(
+            status_frame, orient=tk.HORIZONTAL, mode='determinate')
+        self.progress_bar.pack(fill=tk.X, pady=5)
 
-            ttk.Label(info_frame, text=info_text, wraplength=500,
-                      justify=tk.LEFT).pack(fill=tk.X)
+        # 4. Botões de Ação
+        actions_frame = ttk.Frame(self.main_container)
+        actions_frame.pack(fill=tk.X, pady=10)
 
-        except Exception as e:
-            messagebox.showerror(
-                "Erro", f"Erro ao configurar aba de áudio: {e}")
+        self.btn_cancelar = ttk.Button(
+            actions_frame, text="CANCELAR", state=tk.DISABLED, command=self.cancelar_operacao)
+        self.btn_cancelar.pack(side=tk.RIGHT, padx=5)
 
-    def configurar_aba_video(self):
-        """Configura os widgets da aba de vídeo"""
-        try:
-            # Formato de saída
-            formato_frame = ttk.Frame(self.aba_video)
-            formato_frame.pack(fill=tk.X, pady=10)
+        self.btn_converter = ttk.Button(
+            actions_frame, text="INICIAR CONVERSÃO", style="Action.TButton", command=self.iniciar_thread_conversao)
+        self.btn_converter.pack(side=tk.RIGHT, padx=5)
 
-            ttk.Label(formato_frame, text="Converter para:").pack(
-                side=tk.LEFT, padx=(0, 10))
+        # Configurações de Log Interno
+        logging.basicConfig(level=logging.INFO,
+                            format='%(asctime)s - %(levelname)s - %(message)s')
 
-            # MODIFICADO: Adicionado 'gif'
-            formatos_video = list(self.extensoes_video.keys())
-            if 'gif' not in formatos_video:
-                formatos_video.append('gif')
+    def on_tab_change(self, event):
+        """Atualiza o modo ativo baseado na aba selecionada"""
+        tab_index = self.tabs.index(self.tabs.select())
+        if tab_index == 0:
+            self.modo_ativo.set("video")
+        elif tab_index == 1:
+            self.modo_ativo.set("audio")
+        elif tab_index == 2:
+            self.modo_ativo.set("imagem")
+        self.atualizar_sugestao_extensao()
 
-            self.combo_formato_video = ttk.Combobox(formato_frame, textvariable=self.formato_destino_var,
-                                                    values=formatos_video, width=15, state="readonly")
-            self.combo_formato_video.pack(side=tk.LEFT)
-            self.combo_formato_video.set('mp4')
+    def selecionar_arquivo(self):
+        tipos = [
+            ("Todos os suportados",
+             "*.mp4 *.mkv *.avi *.mov *.webm *.mp3 *.wav *.flac *.jpg *.jpeg *.png *.jfif *.webp"),
+            ("Vídeos", "*.mp4 *.mkv *.avi *.mov *.webm"),
+            ("Áudios", "*.mp3 *.wav *.flac *.m4a"),
+            ("Imagens", "*.jpg *.jpeg *.png *.jfif *.webp *.bmp"),
+            ("Todos os arquivos", "*.*")
+        ]
 
-            # Qualidade
-            qualidade_frame = ttk.Frame(self.aba_video)
-            qualidade_frame.pack(fill=tk.X, pady=10)
+        arquivo = filedialog.askopenfilename(
+            title="Selecionar arquivo para conversão", filetypes=tipos)
 
-            ttk.Label(qualidade_frame, text="Resolução:").pack(
-                side=tk.LEFT, padx=(0, 10))
-            self.combo_qualidade_video = ttk.Combobox(qualidade_frame, textvariable=self.qualidade_var,
-                                                      values=self.qualidades_video, width=20, state="readonly")
-            self.combo_qualidade_video.pack(side=tk.LEFT)
-            self.combo_qualidade_video.set(self.qualidades_video[0])
+        if arquivo:
+            self.arquivo_origem_var.set(arquivo)
+            tipo_detectado = self.detectar_tipo_arquivo(arquivo)
+            ext = arquivo.lower().split('.')[-1]
 
-            # Informações
-            info_frame = ttk.Frame(self.aba_video)
-            info_frame.pack(fill=tk.X, pady=10)
+            self.lbl_info_arquivo.config(
+                text=f"Selecionado: {os.path.basename(arquivo)} | Tipo: {tipo_detectado.upper()}")
 
-            info_text = ("Converte arquivos de vídeo entre diferentes formatos (incluindo MP4 para GIF).\n"
-                         f"Formatos suportados: {', '.join(list(self.extensoes_video.keys())[:5])}...")
+            # Auto-selecionar a aba correta
+            if tipo_detectado == "video":
+                self.tabs.select(self.tab_video)
+            elif tipo_detectado == "audio":
+                self.tabs.select(self.tab_audio)
+            elif tipo_detectado == "imagem":
+                self.tabs.select(self.tab_imagem)
 
-            ttk.Label(info_frame, text=info_text, wraplength=500,
-                      justify=tk.LEFT).pack(fill=tk.X)
+            if not self.pasta_destino_var.get():
+                self.pasta_destino_var.set(os.path.dirname(arquivo))
 
-        except Exception as e:
-            messagebox.showerror(
-                "Erro", f"Erro ao configurar aba de vídeo: {e}")
+            self.atualizar_sugestao_extensao()
 
-    def configurar_aba_imagem(self):
-        """Configura os widgets da aba de imagem"""
-        try:
-            # Formato de saída
-            formato_frame = ttk.Frame(self.aba_imagem)
-            formato_frame.pack(fill=tk.X, pady=10)
+    def selecionar_pasta(self):
+        pasta = filedialog.askdirectory(title="Selecionar pasta de destino")
+        if pasta:
+            self.pasta_destino_var.set(pasta)
 
-            ttk.Label(formato_frame, text="Converter para:").pack(
-                side=tk.LEFT, padx=(0, 10))
+    def atualizar_sugestao_extensao(self):
+        """Tenta prever a extensão de saída baseada na aba e entrada"""
+        modo = self.modo_ativo.get()
+        if not self.arquivo_origem_var.get():
+            return
 
-            # MODIFICADO: Adicionado 'mp4'
-            formatos_imagem = list(
-                self.extensoes_imagem.keys()) + list(self.extensoes_gif.keys())
-            if 'mp4' not in formatos_imagem:
-                formatos_imagem.append('mp4')
+        # Lógica para evitar converter para a mesma extensão por acidente
+        ext_origem = self.arquivo_origem_var.get().lower().split('.')[-1]
 
-            formatos_imagem = list(set(formatos_imagem))  # Remover duplicatas
-
-            self.combo_formato_imagem = ttk.Combobox(formato_frame, textvariable=self.formato_destino_var,
-                                                     values=formatos_imagem, width=15, state="readonly")
-            self.combo_formato_imagem.pack(side=tk.LEFT)
-            self.combo_formato_imagem.set('jpg')
-
-            # Qualidade (só para JPEG)
-            qualidade_frame = ttk.Frame(self.aba_imagem)
-            qualidade_frame.pack(fill=tk.X, pady=10)
-
-            ttk.Label(qualidade_frame, text="Qualidade JPEG:").pack(
-                side=tk.LEFT, padx=(0, 10))
-            qualidades_jpeg = [
-                "Máxima (100%)", "Alta (90%)", "Boa (75%)", "Média (60%)", "Baixa (40%)"]
-            self.combo_qualidade_imagem = ttk.Combobox(qualidade_frame, textvariable=self.qualidade_var,
-                                                       values=qualidades_jpeg, width=20, state="readonly")
-            self.combo_qualidade_imagem.pack(side=tk.LEFT)
-            self.combo_qualidade_imagem.set(qualidades_jpeg[1])
-
-            # Informações
-            info_frame = ttk.Frame(self.aba_imagem)
-            info_frame.pack(fill=tk.X, pady=10)
-
-            info_text = ("Converte imagens (incluindo GIF/WEBP para MP4).\n"
-                         f"Suporta: {', '.join(list(self.extensoes_imagem.keys())[:4])}, GIF, WebP animado...")
-
-            ttk.Label(info_frame, text=info_text, wraplength=500,
-                      justify=tk.LEFT).pack(fill=tk.X)
-
-        except Exception as e:
-            messagebox.showerror(
-                "Erro", f"Erro ao configurar aba de imagem: {e}")
-
-    def on_arquivo_mudou(self, *args):
-        """Chamado quando o arquivo de origem muda"""
-        try:
-            arquivo = self.arquivo_origem_var.get()
-            if arquivo and os.path.isfile(arquivo):
-                tipo = self.detectar_tipo_arquivo(arquivo)
-                extensao = arquivo.lower().split('.')[-1]
-
-                # Atualizar label do tipo
-                if tipo == "audio":
-                    descricao = self.extensoes_audio.get(extensao, "Áudio")
-                    self.tipo_label.config(
-                        text=f"Tipo detectado: Áudio ({extensao.upper()}) - {descricao}")
-                    self.selecionar_aba_audio()
-                elif tipo == "video":
-                    descricao = self.extensoes_video.get(extensao, "Vídeo")
-                    self.tipo_label.config(
-                        text=f"Tipo detectado: Vídeo ({extensao.upper()}) - {descricao}")
-                    self.selecionar_aba_video()
-                elif tipo in ["imagem", "gif"]:
-                    descricoes = {**self.extensoes_imagem,
-                                  **self.extensoes_gif}
-                    descricao = descricoes.get(extensao, "Imagem")
-                    self.tipo_label.config(
-                        text=f"Tipo detectado: Imagem ({extensao.upper()}) - {descricao}")
-                    self.selecionar_aba_imagem()
-                else:
-                    self.tipo_label.config(
-                        text=f"Tipo: Desconhecido ({extensao.upper()})")
-
-                # Definir pasta de destino padrão
-                if not self.pasta_destino_var.get():
-                    pasta_origem = os.path.dirname(arquivo)
-                    self.pasta_destino_var.set(pasta_origem)
-
+        if modo == "video":
+            if ext_origem == "mp4":
+                self.cb_video_fmt.set("mkv")
             else:
-                self.tipo_label.config(
-                    text="Selecione um arquivo para detectar o tipo")
-        except Exception as e:
-            self.tipo_label.config(text="Erro ao detectar tipo do arquivo")
-
-    def selecionar_aba_audio(self):
-        """Seleciona e exibe apenas a aba de áudio"""
-        self.limpar_abas()
-        self.notebook.add(self.aba_audio, text="Conversão de Áudio")
-        self.notebook.select(self.aba_audio)
-        self.modo_conversao_var.set("audio")
-
-    def selecionar_aba_video(self):
-        """Seleciona e exibe apenas a aba de vídeo"""
-        self.limpar_abas()
-        self.notebook.add(self.aba_video, text="Conversão de Vídeo")
-        self.notebook.select(self.aba_video)
-        self.modo_conversao_var.set("video")
-
-    def selecionar_aba_imagem(self):
-        """Seleciona e exibe apenas a aba de imagem"""
-        self.limpar_abas()
-        self.notebook.add(self.aba_imagem, text="Conversão de Imagem")
-        self.notebook.select(self.aba_imagem)
-        self.modo_conversao_var.set("imagem")
-
-    def limpar_abas(self):
-        """Remove todas as abas do notebook"""
-        for i in range(self.notebook.index("end")):
-            self.notebook.forget(0)
-
-    def escolher_arquivo(self):
-        """Abre diálogo para escolher arquivo de origem"""
-        try:
-            # Criar filtros para todos os tipos suportados
-            todas_extensoes = []
-            todas_extensoes.extend(self.extensoes_audio.keys())
-            todas_extensoes.extend(self.extensoes_video.keys())
-            todas_extensoes.extend(self.extensoes_imagem.keys())
-            todas_extensoes.extend(self.extensoes_gif.keys())
-
-            # Remover duplicatas e criar padrão
-            todas_extensoes = list(set(todas_extensoes))
-            padrao_todas = ";".join([f"*.{ext}" for ext in todas_extensoes])
-
-            filetypes = [
-                ("Todos os arquivos suportados", padrao_todas),
-                ("Arquivos de áudio", ";".join(
-                    [f"*.{ext}" for ext in self.extensoes_audio.keys()])),
-                ("Arquivos de vídeo", ";".join(
-                    [f"*.{ext}" for ext in self.extensoes_video.keys()])),
-                ("Arquivos de imagem", ";".join(
-                    [f"*.{ext}" for ext in list(self.extensoes_imagem.keys()) + list(self.extensoes_gif.keys())])),
-                ("Todos os arquivos", "*.*")
-            ]
-
-            arquivo = filedialog.askopenfilename(
-                title="Selecionar arquivo para converter",
-                filetypes=filetypes
-            )
-
-            if arquivo:
-                self.arquivo_origem_var.set(arquivo)
-
-        except Exception as e:
-            messagebox.showerror("Erro", f"Erro ao selecionar arquivo: {e}")
-
-    def escolher_pasta(self):
-        """Abre diálogo para escolher pasta de destino"""
-        try:
-            pasta = filedialog.askdirectory(
-                title="Selecionar pasta de destino",
-                initialdir=self.pasta_destino_var.get()
-            )
-            if pasta:
-                self.pasta_destino_var.set(pasta)
-        except Exception as e:
-            messagebox.showerror("Erro", f"Erro ao selecionar pasta: {e}")
+                self.cb_video_fmt.set("mp4")
+        elif modo == "audio":
+            if ext_origem == "mp3":
+                self.cb_audio_fmt.set("wav")
+            else:
+                self.cb_audio_fmt.set("mp3")
+        elif modo == "imagem":
+            if ext_origem in ["jpg", "jpeg", "jfif"]:
+                self.cb_img_fmt.set("png")
+            else:
+                self.cb_img_fmt.set("jpg")
 
     def cancelar_operacao(self):
-        """Cancela a operação em andamento"""
-        try:
+        if self.processo_ativo:
             self.cancelar_conversao = True
-            if self.processo_ativo:
-                self.processo_ativo.terminate()
+            self.processo_ativo.terminate()
+            self.lbl_status.config(
+                text="Operação interrompida pelo usuário.", foreground="red")
+            self.finalizar_ui_pos_conversao()
 
-            self.progresso_label.config(text="Operação cancelada")
-            self.barra_progresso.stop()
-            self.botao_converter.config(state=tk.NORMAL)
-            self.botao_cancelar.config(state=tk.DISABLED)
+    def iniciar_thread_conversao(self):
+        # Validações Iniciais
+        origem = self.arquivo_origem_var.get()
+        destino_dir = self.pasta_destino_var.get()
 
-        except Exception as e:
-            messagebox.showerror("Erro", f"Erro ao cancelar operação: {e}")
+        if not origem or not os.path.exists(origem):
+            messagebox.showerror(
+                "Erro", "Selecione um arquivo de origem válido.")
+            return
+        if not destino_dir or not os.path.isdir(destino_dir):
+            messagebox.showerror(
+                "Erro", "Selecione uma pasta de destino válida.")
+            return
 
-    def iniciar_conversao(self):
-        """Inicia o processo de conversão"""
-        try:
-            # Validações
-            arquivo_origem = self.arquivo_origem_var.get().strip()
-            if not arquivo_origem or not os.path.isfile(arquivo_origem):
-                messagebox.showerror(
-                    "Erro", "Por favor, selecione um arquivo válido.")
-                return
+        # Bloquear interface para evitar múltiplas execuções simultâneas
+        self.btn_converter.config(state=tk.DISABLED)
+        self.btn_cancelar.config(state=tk.NORMAL)
+        self.progress_bar['value'] = 0
+        self.cancelar_conversao = False
 
-            pasta_destino = self.pasta_destino_var.get().strip()
-            if not pasta_destino or not os.path.isdir(pasta_destino):
-                messagebox.showerror(
-                    "Erro", "Por favor, selecione uma pasta de destino válida.")
-                return
-
-            formato_destino = self.formato_destino_var.get()
-            if not formato_destino:
-                messagebox.showerror(
-                    "Erro", "Por favor, selecione um formato de destino.")
-                return
-
-            # Verificar se não é conversão para o mesmo formato
-            extensao_origem = arquivo_origem.lower().split('.')[-1]
-            if extensao_origem == formato_destino.lower():
-                resposta = messagebox.askyesno("Aviso",
-                                               f"O arquivo já está no formato {formato_destino.upper()}. "
-                                               "Deseja continuar mesmo assim? (Útil para alterar qualidade)")
-                if not resposta:
-                    return
-
-            # Desativar botão durante a conversão
-            self.botao_converter.config(state=tk.DISABLED)
-            self.botao_cancelar.config(state=tk.NORMAL)
-            self.progresso_label.config(text="Iniciando conversão...")
-            self.barra_progresso.start()
-
-            # Iniciar conversão em thread separada
-            threading.Thread(target=self.executar_conversao,
-                             daemon=True).start()
-
-        except Exception as e:
-            messagebox.showerror("Erro", f"Erro ao iniciar conversão: {e}")
-            self.botao_converter.config(state=tk.NORMAL)
+        # Disparo da execução em segundo plano para não travar a GUI
+        threading.Thread(target=self.executar_conversao, daemon=True).start()
 
     def executar_conversao(self):
-        """Executa a conversão com FFmpeg"""
+        """Núcleo do processamento: gerencia o ciclo de vida da execução do FFmpeg"""
         try:
-            self.cancelar_conversao = False
+            origem = self.arquivo_origem_var.get()
+            destino_dir = self.pasta_destino_var.get()
+            modo = self.modo_ativo.get()
 
-            arquivo_origem = self.arquivo_origem_var.get()
-            pasta_destino = self.pasta_destino_var.get()
-            formato_destino = self.formato_destino_var.get()
-            modo = self.modo_conversao_var.get()
+            # Captura de parâmetros dinâmicos baseados no contexto da aba selecionada
+            if modo == "video":
+                formato = self.cb_video_fmt.get()
+                qualidade = self.cb_video_qual.get()
+            elif modo == "audio":
+                formato = self.cb_audio_fmt.get()
+                qualidade = self.cb_audio_qual.get()
+            else:
+                formato = self.cb_img_fmt.get()
+                qualidade = self.cb_img_qual.get()
 
-            # Gerar nome do arquivo de saída
-            nome_base = os.path.splitext(os.path.basename(arquivo_origem))[0]
-            arquivo_destino = os.path.join(
-                pasta_destino, f"{nome_base}.{formato_destino}")
+            # Construção do nome do arquivo de saída com proteção contra duplicatas
+            nome_base = Path(origem).stem
+            saida = os.path.join(destino_dir, f"{nome_base}.{formato}")
 
-            # Se arquivo já existe, criar versão numerada
-            contador = 1
-            arquivo_original = arquivo_destino
-            while os.path.exists(arquivo_destino):
-                nome_arquivo = f"{nome_base}_{contador}.{formato_destino}"
-                arquivo_destino = os.path.join(pasta_destino, nome_arquivo)
-                contador += 1
+            count = 1
+            while os.path.exists(saida):
+                saida = os.path.join(
+                    destino_dir, f"{nome_base}_{count}.{formato}")
+                count += 1
 
-            # Obter comando FFmpeg
             ffmpeg_path = self.obter_ffmpeg_path()
-            if not ffmpeg_path:
-                raise Exception("FFmpeg não encontrado")
+            # Comando base com supressão de banner para logs limpos
+            comando = [ffmpeg_path, "-hide_banner", "-i", origem]
 
-            # --- MUDANÇA AQUI ---
-            # Voltamos ao comando original, sem forçar parâmetros de entrada
-            comando = [ffmpeg_path, "-i", arquivo_origem]
-            # --- FIM DA MUDANÇA ---
-
-            # Configurações específicas por tipo
-            if modo == "audio":
-                self.configurar_comando_audio(comando, formato_destino)
-            elif modo == "video":
-                self.configurar_comando_video(comando, formato_destino)
+            # Injeção de parâmetros específicos por tipo de mídia
+            if modo == "video":
+                self.configurar_comando_video(comando, formato, qualidade)
+            elif modo == "audio":
+                self.configurar_comando_audio(comando, formato, qualidade)
             elif modo == "imagem":
-                self.configurar_comando_imagem(comando, formato_destino)
+                self.configurar_comando_imagem(comando, formato, qualidade)
 
-            # Adicionar arquivo de saída
-            comando.extend(["-y", arquivo_destino])  # -y para sobrescrever
+            # Adição do parâmetro de saída e sobrescrita forçada (controle manual via código)
+            comando.extend(["-y", saida])
 
-            self.root.after(0, lambda: self.progresso_label.config(
-                text="Convertendo arquivo..."))
+            logging.info(f"Comando Gerado: {' '.join(comando)}")
+            self.root.after(0, lambda: self.lbl_status.config(
+                text="Convertendo... Por favor, aguarde.", foreground="#0056b3"))
 
-            # Executar comando
+            # Inicialização do subprocesso capturando stdout/stderr para monitoramento
             self.processo_ativo = subprocess.Popen(
                 comando,
                 stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
+                stderr=subprocess.STDOUT,
+                universal_newlines=True,
                 encoding='utf-8',
-                errors='ignore',
+                errors='replace',
                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
             )
 
-            # Aguardar conclusão
-            stdout, stderr = self.processo_ativo.communicate()
-            codigo_saida = self.processo_ativo.returncode
+            # Monitoramento em tempo real da saída do FFmpeg para atualizar a barra de progresso
+            while True:
+                linha = self.processo_ativo.stdout.readline()
+                if not linha and self.processo_ativo.poll() is not None:
+                    break
 
+                if self.cancelar_conversao:
+                    break
+
+                # Incremento visual baseado nos frames processados reportados pelo FFmpeg
+                if "frame=" in linha or "size=" in linha or "time=" in linha:
+                    self.root.after(0, lambda: self.progress_bar.step(0.2))
+
+            self.processo_ativo.wait()
+
+            # Limpeza e tratamento em caso de interrupção pelo usuário
             if self.cancelar_conversao:
-                if os.path.exists(arquivo_destino):
-                    os.remove(arquivo_destino)
-                self.root.after(0, lambda: self.progresso_label.config(
-                    text="Conversão cancelada"))
+                if os.path.exists(saida):
+                    try:
+                        os.remove(saida)
+                    except:
+                        pass
+                self.root.after(0, lambda: self.lbl_status.config(
+                    text="Conversão cancelada.", foreground="orange"))
                 return
 
-            if codigo_saida == 0:
-                self.root.after(0, lambda: self.progresso_label.config(
-                    text="Conversão concluída com sucesso!"))
-                self.root.after(0, lambda: messagebox.showinfo("Sucesso",
-                                                               f"Arquivo convertido com sucesso!\nSalvo como: {os.path.basename(arquivo_destino)}"))
+            # Validação do resultado final da execução
+            if self.processo_ativo.returncode == 0:
+                self.root.after(0, lambda: self.lbl_status.config(
+                    text="Concluído com sucesso!", foreground="green"))
+                self.root.after(0, lambda: messagebox.showinfo(
+                    "Sucesso", f"Arquivo gerado:\n{os.path.basename(saida)}"))
             else:
-                error_msg = stderr.strip() if stderr else "Erro desconhecido"
-
-                logging.error(f"Erro FFmpeg completo: {error_msg}")
-
-                self.root.after(0, lambda: self.progresso_label.config(
-                    text="Erro na conversão"))
-
-                clean_error = error_msg
-                try:
-                    # Tenta remover o banner do ffmpeg da mensagem de erro
-                    clean_error = re.sub(
-                        r'ffmpeg version.*?\n', '', error_msg, flags=re.DOTALL)
-                    clean_error = re.sub(
-                        r'built with.*?\n', '', clean_error, flags=re.DOTALL)
-                    clean_error = re.sub(
-                        r'configuration:.*?\n', '', clean_error, flags=re.DOTALL)
-                    clean_error = re.sub(
-                        r'libavutil.*?\n', '', clean_error, flags=re.DOTALL)
-                    clean_error = re.sub(
-                        r'libavcodec.*?\n', '', clean_error, flags=re.DOTALL)
-                    clean_error = re.sub(
-                        r'libavformat.*?\n', '', clean_error, flags=re.DOTALL)
-                    clean_error = re.sub(
-                        r'libavdevice.*?\n', '', clean_error, flags=re.DOTALL)
-                    clean_error = re.sub(
-                        r'libavfilter.*?\n', '', clean_error, flags=re.DOTALL)
-                    clean_error = re.sub(
-                        r'libswscale.*?\n', '', clean_error, flags=re.DOTALL)
-                    clean_error = re.sub(
-                        r'libswresample.*?\n', '', clean_error, flags=re.DOTALL)
-                    clean_error = re.sub(
-                        r'libpostproc.*?\n', '', clean_error, flags=re.DOTALL)
-                    clean_error = clean_error.strip()
-                except Exception:
-                    pass
-
-                self.root.after(0, lambda: messagebox.showerror("Erro",
-                                                                f"Erro durante a conversão:\n{clean_error[:250]}..."))
+                self.root.after(0, lambda: self.lbl_status.config(
+                    text="Falha técnica na conversão.", foreground="red"))
+                self.root.after(0, lambda: messagebox.showerror(
+                    "Erro FFmpeg", "O FFmpeg encontrou um erro. Verifique a integridade do arquivo de origem."))
 
         except Exception as e:
-            logging.error(f"Erro na aplicação (Python): {str(e)}")
-            self.root.after(0, lambda: self.progresso_label.config(
-                text=f"Erro: {str(e)[:50]}..."))
+            logging.critical(f"Erro fatal na thread de execução: {e}")
             self.root.after(0, lambda: messagebox.showerror(
-                "Erro", f"Ocorreu um erro: {str(e)}"))
+                "Erro de Sistema", f"Falha interna crítica: {str(e)}"))
         finally:
-            self.root.after(0, lambda: self.barra_progresso.stop())
-            self.root.after(
-                0, lambda: self.botao_converter.config(state=tk.NORMAL))
-            self.root.after(
-                0, lambda: self.botao_cancelar.config(state=tk.DISABLED))
-            self.processo_ativo = None
+            self.root.after(0, self.finalizar_ui_pos_conversao)
 
-    def configurar_comando_audio(self, comando, formato_destino):
-        """Configura comando FFmpeg para conversão de áudio"""
-        qualidade = self.qualidade_var.get()
+    def configurar_comando_video(self, comando, formato, qualidade):
+        """Define os parâmetros de transcodificação de vídeo e otimização de GIFs"""
+        filtros = []
 
-        if qualidade != "Manter Original":
-            if "320kbps" in qualidade:
-                comando.extend(["-b:a", "320k"])
-            elif "256kbps" in qualidade:
-                comando.extend(["-b:a", "256k"])
-            elif "192kbps" in qualidade:
-                comando.extend(["-b:a", "192k"])
-            elif "128kbps" in qualidade:
-                comando.extend(["-b:a", "128k"])
-            elif "96kbps" in qualidade:
-                comando.extend(["-b:a", "96k"])
-            elif "64kbps" in qualidade:
-                comando.extend(["-b:a", "64k"])
+        # Mapeamento de resoluções para o filtro de escala (scale)
+        res_map = {
+            "4K (2160p)": "3840:2160",
+            "1080p (Full HD)": "1920:1080",
+            "720p (HD)": "1280:720",
+            "480p (SD)": "854:480",
+            "360p (SD Baixa)": "640:360"
+        }
 
-        # Configurações específicas por formato de áudio
-        if formato_destino == "flac":
+        if qualidade in res_map:
+            # Filtro para redimensionamento respeitando o aspect ratio (padding para evitar distorção)
+            w, h = res_map[qualidade].split(':')
+            filtros.append(
+                f"scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:(ow-iw)/2:(oh-ih)/2")
+
+        if formato == "gif":
+            # Técnica avançada de Paleta de Cores para GIFs de alta fidelidade
+            # Reduzimos o FPS para 12 para garantir equilíbrio entre fluidez e tamanho de arquivo
+            fps_val = "12"
+            scale_val = "480:-1"  # Resolução mobile-friendly por padrão para GIFs
+
+            # Filtro complexo: gera paleta global e aplica para evitar pontilhado excessivo
+            gif_filter = f"fps={fps_val},scale={scale_val}:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse"
+            # -an remove fluxos de áudio incompatíveis
+            comando.extend(["-vf", gif_filter, "-an"])
+        else:
+            # Aplicação de filtros de vídeo gerais
+            if filtros:
+                comando.extend(["-vf", ",".join(filtros)])
+
+            # Seleção de codecs baseada no container de destino
+            if formato == "webm":
+                comando.extend(["-c:v", "libvpx-vp9", "-crf",
+                               "30", "-b:v", "0", "-c:a", "libopus"])
+            elif formato == "avi":
+                comando.extend(["-c:v", "libx264", "-c:a", "libmp3lame"])
+            elif formato == "wmv":
+                comando.extend(["-c:v", "wmv2", "-c:a", "wmav2"])
+            else:
+                # Perfil padrão (H.264 + AAC) para MP4, MKV e MOV
+                comando.extend(["-c:v", "libx264", "-preset", "medium",
+                               "-crf", "23", "-c:a", "aac", "-b:a", "192k"])
+
+    def configurar_comando_audio(self, comando, formato, qualidade):
+        """Implementa a lógica de bitrate e codecs para áudio puro"""
+        bitrates = {
+            "320kbps (Alta)": "320k", "256kbps (Alta)": "256k",
+            "192kbps (Média)": "192k", "128kbps (Padrão)": "128k", "64kbps (Baixa)": "64k"
+        }
+
+        if qualidade in bitrates:
+            comando.extend(["-b:a", bitrates[qualidade]])
+
+        # Mapeamento de Codecs por Formato
+        if formato == "flac":
             comando.extend(["-c:a", "flac"])
-        elif formato_destino == "wav":
+        elif formato == "wav":
             comando.extend(["-c:a", "pcm_s16le"])
-        elif formato_destino == "mp3":
-            comando.extend(["-c:a", "libmp3lame"])
-        elif formato_destino == "aac":
+        elif formato == "aac" or formato == "m4a":
             comando.extend(["-c:a", "aac"])
-        elif formato_destino == "ogg":
+        elif formato == "ogg":
             comando.extend(["-c:a", "libvorbis"])
-        elif formato_destino == "opus":
+        elif formato == "opus":
             comando.extend(["-c:a", "libopus"])
-        elif formato_destino == "m4a":
-            comando.extend(["-c:a", "aac"])
-        elif formato_destino == "alac":
+        elif formato == "alac":
             comando.extend(["-c:a", "alac"])
+        else:
+            comando.extend(["-c:a", "libmp3lame"])
 
-    def configurar_comando_video(self, comando, formato_destino):
-        """Configura comando FFmpeg para conversão de vídeo"""
-        qualidade = self.qualidade_var.get()
-        filtros_vf = []  # Usar uma lista para construir filtros
+    def configurar_comando_imagem(self, comando, formato, qualidade):
+        """Lógica para imagens estáticas, suporte JFIF e conversão de GIF/WebP para MP4"""
+        ext_origem = self.arquivo_origem_var.get().lower().split('.')[-1]
 
-        # --- LÓGICA DE ESCALA E GIF CORRIGIDA ---
-
-        # 1. Preparar o filtro de escala e as flags
-        filtro_escala = ""
-        # Prepara a flag do lanczos, que SÓ deve ser usada se a saída for GIF
-        flags_gif = ":flags=lanczos" if formato_destino == "gif" else ""
-
-        if qualidade != "Manter Original":
-            # Se o usuário escolheu uma resolução, aplica ela + a flag do GIF (se aplicável)
-            if "4K" in qualidade:
-                filtro_escala = f"scale=3840:2160{flags_gif}"
-            elif "1080p" in qualidade:
-                filtro_escala = f"scale=1920:1080{flags_gif}"
-            elif "720p" in qualidade:
-                filtro_escala = f"scale=1280:720{flags_gif}"
-            elif "480p" in qualidade:
-                filtro_escala = f"scale=854:480{flags_gif}"
-            elif "360p" in qualidade:
-                filtro_escala = f"scale=640:360{flags_gif}"
-        elif formato_destino == "gif":
-            # Se for "Manter Original" E a saída for GIF,
-            # é melhor aplicar um scale padrão (ex: 500px de largura)
-            # para evitar GIFs gigantescos.
-            filtro_escala = f"scale=500:-1{flags_gif}"
-
-        # Adiciona o filtro de escala (se algum foi definido)
-        if filtro_escala:
-            filtros_vf.append(filtro_escala)
-
-        # 2. Adicionar filtro de FPS (APENAS para GIF)
-        if formato_destino == "gif":
-            filtros_vf.append("fps=10")
-
-        # --- FIM DA LÓGICA CORRIGIDA ---
-
-        # Configurações específicas por formato de vídeo (Codecs)
-        if formato_destino == "gif":
-            # Nenhuma configuração extra de codec/áudio/crf é necessária
-            pass
-        elif formato_destino == "mp4":
-            comando.extend(["-c:v", "libx264", "-c:a", "aac"])
-            comando.extend(["-crf", "23", "-preset", "medium"])
-        elif formato_destino == "mkv":
-            comando.extend(["-c:v", "libx264", "-c:a", "aac"])
-            comando.extend(["-crf", "23", "-preset", "medium"])
-        elif formato_destino == "avi":
-            comando.extend(["-c:v", "libx264", "-c:a", "mp3"])
-            comando.extend(["-crf", "23", "-preset", "medium"])
-        elif formato_destino == "webm":
-            comando.extend(["-c:v", "libvpx-vp9", "-c:a", "libopus"])
-            comando.extend(["-crf", "23", "-preset", "medium"])
-        elif formato_destino == "mov":
-            comando.extend(["-c:v", "libx264", "-c:a", "aac"])
-            comando.extend(["-crf", "23", "-preset", "medium"])
-        elif formato_destino == "flv":
-            comando.extend(["-c:v", "libx264", "-c:a", "aac"])
-            comando.extend(["-crf", "23", "-preset", "medium"])
-        elif formato_destino == "wmv":
-            comando.extend(["-c:v", "wmv2", "-c:a", "wmav2"])
-
-        # Aplica os filtros VF (se houver algum na lista)
-        if filtros_vf:
-            comando.extend(["-vf", ",".join(filtros_vf)])
-
-    def configurar_comando_imagem(self, comando, formato_destino):
-        """Configura comando FFmpeg para conversão de imagem"""
-        qualidade = self.qualidade_var.get()
-
-        # Configurações específicas por formato de imagem
-        if formato_destino.lower() in ["jpg", "jpeg"]:
-            # Configurar qualidade JPEG
-            if "100%" in qualidade:
-                comando.extend(["-q:v", "1"])
-            elif "90%" in qualidade:
-                comando.extend(["-q:v", "2"])
-            elif "75%" in qualidade:
-                comando.extend(["-q:v", "5"])
-            elif "60%" in qualidade:
-                comando.extend(["-q:v", "10"])
-            elif "40%" in qualidade:
-                comando.extend(["-q:v", "15"])
-
-        elif formato_destino == "mp4":  # <--- ADICIONADO
-            # Converte GIF/WEBP animado para MP4
-            # -pix_fmt yuv420p é crucial para compatibilidade
-            # -vf scale... garante que as dimensões sejam pares (necessário para yuv420p)
+        # Caso especial: Conversão de GIF animado ou WebP animado para Vídeo (MP4)
+        if (ext_origem in ['gif', 'webp']) and formato == 'mp4':
             comando.extend([
                 "-c:v", "libx264",
                 "-pix_fmt", "yuv420p",
-                "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2"
+                "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+                "-movflags", "+faststart"
             ])
+            return
 
-        elif formato_destino == "png":
+        # Tratamento de qualidade para formatos baseados em JPEG (incluindo JFIF)
+        if formato in ["jpg", "jpeg", "jfif"]:
+            q_val = "2"  # Padrão Alta
+            if "90%" in qualidade:
+                q_val = "2"
+            elif "75%" in qualidade:
+                q_val = "5"
+            elif "50%" in qualidade:
+                q_val = "10"
+            comando.extend(["-q:v", q_val])
+
+        # Configurações de Codecs de Imagem
+        if formato == "png":
             comando.extend(["-c:v", "png"])
-        elif formato_destino == "bmp":
+        elif formato == "webp":
+            comando.extend(["-c:v", "libwebp", "-lossless",
+                           "0", "-compression_level", "6"])
+        elif formato == "bmp":
             comando.extend(["-c:v", "bmp"])
-        elif formato_destino == "tiff":
+        elif formato == "tiff":
             comando.extend(["-c:v", "tiff"])
-        elif formato_destino == "webp":
-            comando.extend(["-c:v", "libwebp"])
-        elif formato_destino == "ico":
+        elif formato == "ico":
             comando.extend(["-vf", "scale=256:256"])
 
-        # Para GIFs animados (deixamos como estava)
-        elif formato_destino == "gif":
-            comando.extend(["-vf", "fps=10,scale=320:-1:flags=lanczos"])
+    def finalizar_ui_pos_conversao(self):
+        """Restaura o estado dos widgets após o término do processo"""
+        self.btn_converter.config(state=tk.NORMAL)
+        self.btn_cancelar.config(state=tk.DISABLED)
+        self.progress_bar['value'] = 0
+        self.processo_ativo = None
+
+    def obter_metadados(self, arquivo):
+        """Utiliza FFprobe para extrair informações técnicas do arquivo"""
+        try:
+            ffprobe_path = self.recurso_caminho(
+                "ffprobe.exe") or shutil.which("ffprobe")
+            cmd = [
+                ffprobe_path, "-v", "quiet", "-print_format", "json",
+                "-show_format", "-show_streams", arquivo
+            ]
+            resultado = subprocess.check_output(
+                cmd, stderr=subprocess.STDOUT).decode('utf-8')
+            import json
+            return json.loads(resultado)
+        except:
+            return None
 
 
 def main():
-    """Função principal para executar o aplicativo"""
+    """Inicialização do Loop Principal"""
+    logging.info("Iniciando Aplicativo...")
+    root = tk.Tk()
+
+    # Configuração de Estilo Global
     try:
-        # Configurar logging (REMOVIDO O FileHandler)
-        logging.basicConfig(
-            level=logging.INFO,
-            format='%(asctime)s - %(levelname)s - %(message)s',
-            handlers=[
-                # logging.FileHandler('conversor.log', encoding='utf-8'), # <--- LINHA REMOVIDA
-                logging.StreamHandler()  # Mantém apenas o log no console (CMD)
-            ]
-        )
+        if os.name == 'nt':
+            root.iconbitmap(default=None)  # Placeholder para ícone customizado
+    except:
+        pass
 
-        # Criar janela principal
-        root = tk.Tk()
+    app = FileConverter(root)
 
-        # Tentar definir ícone da janela
-        try:
-            if os.path.exists("icon.ico"):
-                root.iconbitmap("icon.ico")
-        except:
-            pass
-
-        # Criar aplicativo
-        app = FileConverter(root)
-
-        # Configurar evento de fechamento
-        def on_closing():
-            if app.processo_ativo:
-                if messagebox.askokcancel("Fechar", "Uma conversão está em andamento. Deseja cancelar e sair?"):
-                    app.cancelar_operacao()
-                    root.destroy()
-            else:
+    def fechar_janela():
+        if app.processo_ativo:
+            if messagebox.askokcancel("Sair", "Uma conversão está em andamento. Deseja realmente cancelar e sair?"):
+                app.cancelar_operacao()
                 root.destroy()
+        else:
+            root.destroy()
 
-        root.protocol("WM_DELETE_WINDOW", on_closing)
+    root.protocol("WM_DELETE_WINDOW", fechar_janela)
+    root.mainloop()
 
-        # Executar aplicativo
-        root.mainloop()
-
-    except Exception as e:
-        messagebox.showerror(
-            "Erro Fatal", f"Erro ao inicializar aplicativo: {e}")
-        logging.error(f"Erro fatal: {e}")
+# Início da Seção de Utilidades de Frame e UI helper
 
 
+class ToolTip:
+    def __init__(self, widget, text):
+        self.widget = widget
+        self.text = text
+        self.tip_window = None
+        self.widget.bind("<Enter>", self.show_tip)
+        self.widget.bind("<Leave>", self.hide_tip)
+
+    def show_tip(self, event=None):
+        if self.tip_window or not self.text:
+            return
+        x, y, cx, cy = self.widget.bbox("insert")
+        x = x + self.widget.winfo_rootx() + 27
+        y = y + cy + self.widget.winfo_rooty() + 27
+        self.tip_window = tw = tk.Toplevel(self.widget)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry(f"+{x}+{y}")
+        label = tk.Label(tw, text=self.text, justify=tk.LEFT,
+                         background="#ffffe0", relief=tk.SOLID, borderwidth=1,
+                         font=("tahoma", "8", "normal"))
+        label.pack(ipadx=1)
+
+    def hide_tip(self, event=None):
+        tw = self.tip_window
+        self.tip_window = None
+        if tw:
+            tw.destroy()
+
+# Estendendo funcionalidades para logs detalhados
+
+
+class ScrollableTextHandler(logging.Handler):
+    def __init__(self, widget):
+        super().__init__()
+        self.widget = widget
+
+    def emit(self, record):
+        msg = self.format(record)
+
+        def append():
+            self.widget.configure(state='normal')
+            self.widget.insert(tk.END, msg + '\n')
+            self.widget.configure(state='disabled')
+            self.widget.see(tk.END)
+        self.widget.after(0, append)
+
+    def emit(self, record):
+        """Redireciona mensagens de log para um widget de texto se disponível"""
+        msg = self.format(record)
+
+        def append():
+            try:
+                self.widget.configure(state='normal')
+                self.widget.insert(tk.END, msg + '\n')
+                self.widget.configure(state='disabled')
+                self.widget.see(tk.END)
+            except:
+                pass
+        if self.widget:
+            self.widget.after(0, append)
+
+# Seção de Tratamento de Erros e Compatibilidade de Formatos
+
+
+def validar_nome_arquivo(nome):
+    """Remove caracteres inválidos para sistemas de arquivos"""
+    return re.sub(r'[<>:"/\\|?*]', '', nome)
+
+
+def obter_extensao_real(caminho):
+    """Retorna a extensão em minúsculas sem o ponto"""
+    return os.path.splitext(caminho)[1][1:].lower()
+
+# Funções de suporte para o suporte JFIF e conversão de imagem
+
+
+def configurar_imagem_jfif(caminho_origem, caminho_saida, qualidade):
+    """
+    Nota técnica: O FFmpeg trata JFIF como uma variante do JPEG.
+    Esta função garante que o codec correto seja aplicado para manter a 
+    compatibilidade do cabeçalho JFIF durante a transcodificação.
+    """
+    params = ["-i", caminho_origem]
+    if "90%" in qualidade:
+        params.extend(["-q:v", "2"])
+    elif "75%" in qualidade:
+        params.extend(["-q:v", "5"])
+    else:
+        params.extend(["-q:v", "10"])
+    return params
+
+# Finalização do Módulo de Interface e Widgets Auxiliares
+
+
+class CustomButton(tk.Button):
+    """Subclasse de botão para efeitos visuais básicos (Hover)"""
+
+    def __init__(self, master=None, **kwargs):
+        super().__init__(master, **kwargs)
+        self.bind("<Enter>", self.on_enter)
+        self.bind("<Leave>", self.on_leave)
+
+    def on_enter(self, event):
+        self['background'] = '#e1e1e1'
+
+    def on_leave(self, event):
+        self['background'] = '#f0f0f0'
+
+
+# Ponto de Entrada do Sistema
 if __name__ == "__main__":
-    main()
-# fim
+    # Configuração de diretórios temporários para o FFmpeg se necessário
+    os.environ["TMPDIR"] = os.path.join(os.path.expanduser("~"), "AppData", "Local", "Temp") \
+        if os.name == 'nt' else "/tmp"
+
+    try:
+        # Verifica se o FFmpeg está acessível antes de subir a GUI
+        import shutil
+        if not shutil.which("ffmpeg") and not os.path.exists("ffmpeg.exe"):
+            print("Aviso: FFmpeg não detectado no PATH ou diretório local.")
+
+        main()
+    except KeyboardInterrupt:
+        sys.exit(0)
+    except Exception as e:
+        logging.critical(f"Falha ao iniciar aplicação: {e}")
+        messagebox.showerror(
+            "Erro Fatal", f"Ocorreu um erro ao iniciar o programa:\n{e}")
+
+# FIM DO ARQUIVO - CONVERSOR MULTIMÍDIA REESTRUTURADO
