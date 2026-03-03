@@ -80,7 +80,7 @@ pyinstaller file_conversor.spec
 2. Na aba **ÁUDIOS**, defina o formato (ex: FLAC para qualidade sem perda ou MP3 para economia de espaço).
 3. Escolha o bitrate (até 320kbps).
 
-### 🖼️ Imagens e JFIF
+### 🖼️ Imagens
 
 1. Selecione uma imagem.
 2. Na aba **IMAGENS**, escolha o destino. Para JPEGs, você pode ajustar o nível de compressão.
