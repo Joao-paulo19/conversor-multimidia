@@ -48,8 +48,7 @@ Uma aplicação desktop portátil para conversão de arquivos de áudio, vídeo 
    git clone [https://github.com/Joao-paulo19/conversor-multimidia.git](https://github.com/Joao-paulo19/conversor-multimidia.git)
    cd conversor-multimidia
 
-```
-```
+
 2. **Execute o script:**
 ```bash
 python file_conversor.py
