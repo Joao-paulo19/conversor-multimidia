@@ -49,7 +49,7 @@ Uma aplicação desktop portátil para conversão de arquivos de áudio, vídeo 
    cd conversor-multimidia
 
 ```
-
+```
 2. **Execute o script:**
 ```bash
 python file_conversor.py
